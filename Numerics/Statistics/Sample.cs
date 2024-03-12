@@ -908,6 +908,23 @@ namespace Meta.Numerics.Statistics {
         }
 
         /// <summary>
+        /// Performs a two-way analysis of variance.
+        /// </summary>
+        /// <returns>The result of the analysis.</returns>
+        /// <remarks>
+        /// <para>A two-way ANOVA analyzes the effects of two seperate input factors, each with
+        /// two or more nominal values, on a continuous output variable.</para>
+        /// <para>This uses the Type 3 Sum of Squares, which does not require the sample to 
+        /// complete or balanced.</para>
+        /// <para>For more information on ANOVA tests and when to use them, see the remarks for
+        /// <see cref="OneWayAnovaTest(Sample[])"/>.</para>
+        /// </remarks>
+        /// <seealso href="https://en.wikipedia.org/wiki/Two-way_analysis_of_variance"/>
+        public static TwoWayAnovaResult TwoWayAnovaTestTypeIII (string[] rows, string[] columns, double[] values) {
+            return (Univariate.TwoWayAnovaTestTypeIII(rows, columns, values));
+        }
+
+        /// <summary>
         /// Performs a Kruskal-Wallis test on the given samples.
         /// </summary>
         /// <param name="samples">The set of samples to compare.</param>

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-
+using System.Linq;
 using Meta.Numerics.Functions;
 using Meta.Numerics.Statistics.Distributions;
 
@@ -920,6 +920,149 @@ namespace Meta.Numerics.Statistics {
             TwoWayAnovaResult result = new TwoWayAnovaResult(row, column, interaction, error);
             return (result);
 
+        }
+
+        /// <summary>
+        /// Performs a two-way analysis of variance.
+        /// </summary>
+        /// <param name="samples">A two-dimensional array of samples.</param>
+        /// <returns>The result of the analysis.</returns>
+        /// <remarks>
+        /// <para>A two-way ANOVA analyzes the effects of two separate input factors, each with
+        /// two or more nominal values, on a continuous output variable.</para>
+        /// <para>This uses the Type 3 Sum of Squares, which does not require the sample to 
+        /// complete or balanced.</para>
+        /// <para>For more information on ANOVA tests and when to use them, see the remarks for
+        /// <see cref="OneWayAnovaTest(IReadOnlyCollection{double}[])"/>.</para>
+        /// </remarks>
+        /// or one of its entries is <see langword="null"/>.</exception>
+        /// <seealso href="https://en.wikipedia.org/wiki/Two-way_analysis_of_variance"/>
+        public static TwoWayAnovaResult TwoWayAnovaTestTypeIII(string[] rows, string[] columns, double[] values) {
+            if (rows.Length != columns.Length || rows.Length != values.Length) {
+                throw new ArgumentNullException(nameof(values));
+            }
+
+            double[][] codedRows = SimpleCodeVariables(rows);
+            int rCount = codedRows.Length + 1;
+
+            double[][] codedColumns = SimpleCodeVariables(columns);
+            int cCount = codedColumns.Length + 1;
+            double[][] categoricalInteraction = GenerateInteractionsFromSimpleCodedVariables(codedRows, codedColumns);
+
+            if (rCount < 2) throw new InvalidOperationException();
+            if (cCount < 2) throw new InvalidOperationException();
+
+            MultiLinearRegressionResult totalResult = Multivariate.MultiLinearRegression(values, codedRows.Concat(codedColumns).Concat(categoricalInteraction).ToArray());
+            double totalSumOfSquares = totalResult.Anova.Total.SumOfSquares;
+
+            double effectSumOfSquares = (totalSumOfSquares - totalResult.SumOfSquaredResiduals);
+            double ssWithoutRows = (totalSumOfSquares - Multivariate.MultiLinearRegression(values, codedColumns.Concat(categoricalInteraction).ToArray()).SumOfSquaredResiduals);
+            double ssWithoutColumns = (totalSumOfSquares - Multivariate.MultiLinearRegression(values, codedRows.Concat(categoricalInteraction).ToArray()).SumOfSquaredResiduals);
+            double ssWithoutInteractions = (totalSumOfSquares - Multivariate.MultiLinearRegression(values, codedRows.Concat(codedColumns).ToArray()).SumOfSquaredResiduals);
+
+            double columnSumOfSquares = effectSumOfSquares - ssWithoutColumns;
+            double rowsSumOfSquares = effectSumOfSquares - ssWithoutRows;
+            double interactionSumOfSquares = effectSumOfSquares - ssWithoutInteractions;
+            double errorSumOfSquares = totalSumOfSquares - effectSumOfSquares;
+
+            AnovaRow row = new AnovaRow(rowsSumOfSquares, rCount - 1);
+            AnovaRow column = new AnovaRow(columnSumOfSquares, cCount - 1);
+            AnovaRow interaction = new AnovaRow(interactionSumOfSquares, (rCount - 1) * (cCount - 1));
+            AnovaRow error = new AnovaRow(errorSumOfSquares, values.Length - rCount * cCount);
+
+            TwoWayAnovaResult result = new TwoWayAnovaResult(row, column, interaction, error);
+            return (result);
+        }
+
+        private static double[][] GenerateInteractionsFromSimpleCodedVariables(double[][] A, double[][] B) {
+            double[][] interaction = new double[A.Length * B.Length][];
+            for (int i = 0; i < A.Length; i++) {
+                for (int j = 0; j < B.Length; j++) {
+                    interaction[(i * B.Length) + j] = MultiplyArrays(A[i], B[j]);
+                }
+            }
+
+            return interaction;
+        }
+
+        private static double[] MultiplyArrays(double[] A, double[] B) {
+            Debug.Assert(A.Length == B.Length);
+
+            double[] result = new double[A.Length];
+            for (int i = 0; i < A.Length; i++) {
+                result[i] = A[i] * B[i];
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Uses simple contrast coding to convert a list of categorical values into a multidimensional simple coded array.
+        /// This converts a flat set of categorical variables into a set of continuous variables, e.g.
+        /// ['Shift A', 'Shift B', 'Shift A', 'Shift C'] becomes
+        /// [[-1, 1, -1, 0],
+        /// [-1, 0, -1, 1]]
+        /// 
+        /// This will always produce N - 1 arrays, where N is the number of distinct categories given.
+        /// See https://stats.oarc.ucla.edu/spss/faq/coding-systems-for-categorical-variables-in-regression-analysis-2/ for more details
+        /// </summary>
+        private static double[][] SimpleCodeVariables(string[] variables) {
+            // TODO - is there a more efficient way to do this? HashSets don't let you keep track of indices
+            Dictionary<string, int> uniqueCategories = new Dictionary<string, int>();
+            int index = 0;
+            for (int i = 0; i < variables.Length; i++) {
+                if (!uniqueCategories.ContainsKey(variables[i])) {
+                    uniqueCategories[variables[i]] = index++;
+                }
+            }
+
+            // Generate a matrix for the categories.  This is deterministic based on the total number of categories,
+            // and could probaly be pre-calculated for efficiency
+            double[][] matrix = GetCategoryMatrix(uniqueCategories.Count);
+
+            double[][] dummyCodedValues = new double[matrix.Length][];
+
+            for (int i = 0; i < matrix.Length; i++) 
+            {
+                dummyCodedValues[i] = new double[variables.Length];
+                for (int j = 0; j < variables.Length; j++) 
+                {
+                    dummyCodedValues[i][j] = matrix[i][uniqueCategories[variables[j]]];
+                }
+            }
+
+            return dummyCodedValues;
+        }
+
+        /// <summary>
+        /// Produces a category matrix when given a number of categories.  This is determinant, and could be optimized
+        /// by using static arrays that are initialized at compile time.
+        /// This will always produce N - 1 arrays, where N is the number of categories given.
+        /// e.g. when given 4, the result is
+        /// [[-1,1,0,0],
+        ///  [-1,0,1,0],
+        ///  [-1,0,0,1]]
+        /// </summary>
+        private static double[][] GetCategoryMatrix(int numberOfCategories) {
+            if (numberOfCategories == 2) {
+                // Only two categories, code into -1 and 1
+                return new double[][] { new double[] { -1, 1 } };
+            }
+
+            double[][] categoryMatrix = new double[numberOfCategories - 1][];
+            for (int i = 0; i < numberOfCategories - 1; i++) {
+                categoryMatrix[i] = new double[numberOfCategories];
+                for (int j = 0; j < numberOfCategories; j++) {
+                    if (j == 0) {
+                        categoryMatrix[i][j] = -1;
+                    } else if (j == i + 1) {
+                        categoryMatrix[i][j] = 1;
+                    } else {
+                        categoryMatrix[i][j] = 0;
+                    }
+                }
+            }
+
+            return categoryMatrix;
         }
 
         /// <summary>
